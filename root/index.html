@@ -334,6 +334,51 @@
     cursor: pointer;
   }
 
+  /* KEY FORM */
+  .key-form {
+    padding: 40px 24px;
+    text-align: center;
+  }
+
+  .key-form-text {
+    font-size: 14px;
+    color: var(--muted);
+    margin-bottom: 20px;
+    line-height: 1.5;
+  }
+
+  .key-input {
+    display: block;
+    width: 100%;
+    max-width: 340px;
+    margin: 0 auto 16px;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    color: var(--text);
+    background: #fff;
+    outline: none;
+    transition: border-color .15s;
+  }
+
+  .key-input:focus { border-color: var(--green); }
+
+  .key-change-btn {
+    background: none;
+    border: none;
+    color: var(--subtle);
+    font-size: 11px;
+    cursor: pointer;
+    font-family: 'DM Sans', sans-serif;
+    padding: 2px 0;
+    display: block;
+    margin-top: 2px;
+  }
+
+  .key-change-btn:hover { color: var(--green); }
+
   /* FOOTER */
   footer {
     text-align: center;
@@ -361,6 +406,7 @@
     <div class="header-week">
       <div id="week-range">Afgelopen 7 dagen</div>
       <button class="refresh-link" onclick="fetchDeals()">↻ Vernieuwen</button>
+      <button class="key-change-btn" onclick="clearKey();showKeyForm(null)">API-sleutel</button>
     </div>
   </div>
 </header>
@@ -403,6 +449,42 @@
 <script>
 let allDeals = [];
 let activeFilter = 'all';
+const API_KEY_STORAGE = 'ma_deals_api_key';
+
+function getStoredKey() {
+  return localStorage.getItem(API_KEY_STORAGE) || '';
+}
+
+function saveKey(key) {
+  localStorage.setItem(API_KEY_STORAGE, key.trim());
+}
+
+function clearKey() {
+  localStorage.removeItem(API_KEY_STORAGE);
+}
+
+function showKeyForm(errorMsg) {
+  const list = document.getElementById('deals-list');
+  document.getElementById('stats-row').style.display = 'none';
+  document.getElementById('filter-bar').style.display = 'none';
+  list.innerHTML =
+    '<div class="key-form">' +
+      (errorMsg ? '<div class="error-title" style="margin-bottom:12px;color:#c0392b">' + errorMsg + '</div>' : '') +
+      '<div class="key-form-text">Voer je Anthropic API-sleutel in om recente M&amp;A deals op te halen via Claude AI.</div>' +
+      '<input id="key-input" type="password" placeholder="sk-ant-..." class="key-input" onkeydown="if(event.key===\'Enter\')submitKey()" />' +
+      '<button class="btn-retry" onclick="submitKey()">Opslaan &amp; laden</button>' +
+    '</div>';
+  const input = document.getElementById('key-input');
+  if (input) input.focus();
+}
+
+function submitKey() {
+  const input = document.getElementById('key-input');
+  const key = input ? input.value.trim() : '';
+  if (!key) return;
+  saveKey(key);
+  fetchDeals();
+}
 
 function getWeekRange() {
   const now = new Date();
@@ -495,6 +577,12 @@ function renderDeals(deals) {
 }
 
 async function fetchDeals() {
+  const apiKey = getStoredKey();
+  if (!apiKey) {
+    showKeyForm(null);
+    return;
+  }
+
   const list = document.getElementById('deals-list');
   document.getElementById('stats-row').style.display = 'none';
   document.getElementById('filter-bar').style.display = 'none';
@@ -510,15 +598,30 @@ async function fetchDeals() {
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4096,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         system: 'Je bent een M&A data-analist. Zoek de meest recente M&A deals van de afgelopen 7 dagen.\nReturn ONLY a raw JSON array, no markdown, no backticks, no explanation.\nEach object must have: buyer, target, value (number in billions USD as string e.g. "4.2"), sector (1-2 words NL), status (Aangekondigd|In behandeling|Afgerond), date (dag maand in Dutch), summary (2 sentences in Dutch), advisors (comma-separated bank names), rationale (1 sentence in Dutch).\nReturn 6-8 deals. ONLY the JSON array.',
         messages: [{ role: 'user', content: 'Geef me de grootste M&A deals van de afgelopen 7 dagen. Zoek dit op en return alleen een JSON array.' }]
       })
     });
+
+    if (resp.status === 401) {
+      clearKey();
+      showKeyForm('API-sleutel ongeldig of verlopen. Probeer opnieuw.');
+      return;
+    }
+
+    if (!resp.ok) {
+      throw new Error('HTTP ' + resp.status);
+    }
 
     const data = await resp.json();
     let text = '';
