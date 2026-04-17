@@ -630,6 +630,7 @@ function showErrorState(list) {
       '<div class="error-title">Kon deals niet laden</div>' +
       '<div class="error-sub">Controleer je internetverbinding en probeer het opnieuw.</div>' +
       '<button class="btn-retry" onclick="fetchDeals()">Opnieuw proberen</button>' +
+      '<button class="btn-retry" style="background:var(--muted);margin-top:8px" onclick="clearKey();showKeyForm(null)">Andere API-sleutel invoeren</button>' +
     '</div>';
 }
 
@@ -707,7 +708,7 @@ async function fetchViaGemini() {
       }
     );
 
-    if (resp.status === 400 || resp.status === 403) {
+    if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
       localStorage.removeItem(GEMINI_KEY_STORAGE);
       showKeyForm('Gemini API-sleutel ongeldig of verlopen. Probeer opnieuw.');
       return;
