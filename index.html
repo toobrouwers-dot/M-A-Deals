@@ -443,13 +443,14 @@
 </main>
 
 <footer>
-  Data gegenereerd via Claude AI met web search &nbsp;·&nbsp; Bijgewerkt elke keer dat je de pagina laadt
+  Data via Gemini AI (gratis) of Claude AI (betaald) met web search &nbsp;·&nbsp; Bijgewerkt bij elke refresh
 </footer>
 
 <script>
 let allDeals = [];
 let activeFilter = 'all';
 const API_KEY_STORAGE = 'ma_deals_api_key';
+const GEMINI_KEY_STORAGE = 'ma_deals_gemini_key';
 
 function getStoredKey() {
   return localStorage.getItem(API_KEY_STORAGE) || '';
@@ -461,6 +462,13 @@ function saveKey(key) {
 
 function clearKey() {
   localStorage.removeItem(API_KEY_STORAGE);
+  localStorage.removeItem(GEMINI_KEY_STORAGE);
+}
+
+function getProvider() {
+  if (localStorage.getItem(API_KEY_STORAGE)) return 'anthropic';
+  if (localStorage.getItem(GEMINI_KEY_STORAGE)) return 'gemini';
+  return 'none';
 }
 
 function showKeyForm(errorMsg) {
@@ -470,11 +478,20 @@ function showKeyForm(errorMsg) {
   list.innerHTML =
     '<div class="key-form">' +
       (errorMsg ? '<div class="error-title" style="margin-bottom:12px;color:#c0392b">' + errorMsg + '</div>' : '') +
-      '<div class="key-form-text">Voer je Anthropic API-sleutel in om recente M&amp;A deals op te halen via Claude AI.</div>' +
-      '<input id="key-input" type="password" placeholder="sk-ant-..." class="key-input" onkeydown="if(event.key===\'Enter\')submitKey()" />' +
-      '<button class="btn-retry" onclick="submitKey()">Opslaan &amp; laden</button>' +
+      '<div style="margin-bottom:20px;padding:16px;border:1px solid #c8e6c9;border-radius:10px;background:#f1f8e9">' +
+        '<div style="font-size:13px;font-weight:600;color:#2e7d32;margin-bottom:6px">Gratis — Google Gemini API</div>' +
+        '<div class="key-form-text" style="text-align:left;margin-bottom:10px">Maak een gratis API-sleutel aan via <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:#2e7d32">Google AI Studio</a>. Geen creditcard vereist.</div>' +
+        '<input id="gemini-key-input" type="password" placeholder="AIza..." class="key-input" style="margin:0 0 10px" onkeydown="if(event.key===\'Enter\')submitGeminiKey()" />' +
+        '<button class="btn-retry" onclick="submitGeminiKey()">Opslaan &amp; laden</button>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--subtle);margin:16px 0">— of —</div>' +
+      '<div>' +
+        '<div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:6px">Betaald — Anthropic Claude API</div>' +
+        '<input id="key-input" type="password" placeholder="sk-ant-..." class="key-input" onkeydown="if(event.key===\'Enter\')submitKey()" />' +
+        '<button class="btn-retry" style="background:var(--muted)" onclick="submitKey()">Opslaan &amp; laden</button>' +
+      '</div>' +
     '</div>';
-  const input = document.getElementById('key-input');
+  const input = document.getElementById('gemini-key-input');
   if (input) input.focus();
 }
 
@@ -483,6 +500,14 @@ function submitKey() {
   const key = input ? input.value.trim() : '';
   if (!key) return;
   saveKey(key);
+  fetchDeals();
+}
+
+function submitGeminiKey() {
+  const input = document.getElementById('gemini-key-input');
+  const key = input ? input.value.trim() : '';
+  if (!key) return;
+  localStorage.setItem(GEMINI_KEY_STORAGE, key);
   fetchDeals();
 }
 
@@ -577,23 +602,49 @@ function renderDeals(deals) {
 }
 
 async function fetchDeals() {
-  const apiKey = getStoredKey();
-  if (!apiKey) {
-    showKeyForm(null);
-    return;
-  }
+  const provider = getProvider();
+  if (provider === 'anthropic') return fetchViaAnthropic();
+  if (provider === 'gemini')   return fetchViaGemini();
+  showKeyForm(null);
+}
 
+const SYSTEM_PROMPT = 'Je bent een M&A data-analist. Zoek de meest recente M&A deals van de afgelopen 7 dagen.\nReturn ONLY a raw JSON array, no markdown, no backticks, no explanation.\nEach object must have: buyer, target, value (number in billions USD as string e.g. "4.2"), sector (1-2 words NL), status (Aangekondigd|In behandeling|Afgerond), date (dag maand in Dutch), summary (2 sentences in Dutch), advisors (comma-separated bank names), rationale (1 sentence in Dutch).\nReturn 6-8 deals. ONLY the JSON array.';
+const USER_MESSAGE = 'Geef me de grootste M&A deals van de afgelopen 7 dagen. Zoek dit op en return alleen een JSON array.';
+
+function showLoadingState(aiName) {
   const list = document.getElementById('deals-list');
   document.getElementById('stats-row').style.display = 'none';
   document.getElementById('filter-bar').style.display = 'none';
   document.getElementById('week-range').textContent = getWeekRange();
-
   list.innerHTML =
     '<div class="loading-state">' +
       '<div class="loading-text">Deals ophalen via AI...</div>' +
       '<div><span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span></div>' +
-      '<div class="loading-sub">Claude zoekt de laatste M&amp;A-nieuws op</div>' +
+      '<div class="loading-sub">' + aiName + ' zoekt de laatste M&amp;A-nieuws op</div>' +
     '</div>';
+}
+
+function showErrorState(list) {
+  list.innerHTML =
+    '<div class="error-state">' +
+      '<div class="error-title">Kon deals niet laden</div>' +
+      '<div class="error-sub">Controleer je internetverbinding en probeer het opnieuw.</div>' +
+      '<button class="btn-retry" onclick="fetchDeals()">Opnieuw proberen</button>' +
+    '</div>';
+}
+
+function parseDealsFromText(text) {
+  text = text.trim();
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start === -1 || end === -1) throw new Error('No JSON array');
+  return JSON.parse(text.slice(start, end + 1));
+}
+
+async function fetchViaAnthropic() {
+  const apiKey = getStoredKey();
+  const list = document.getElementById('deals-list');
+  showLoadingState('Claude');
 
   try {
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -608,8 +659,8 @@ async function fetchDeals() {
         model: 'claude-sonnet-4-6',
         max_tokens: 4096,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        system: 'Je bent een M&A data-analist. Zoek de meest recente M&A deals van de afgelopen 7 dagen.\nReturn ONLY a raw JSON array, no markdown, no backticks, no explanation.\nEach object must have: buyer, target, value (number in billions USD as string e.g. "4.2"), sector (1-2 words NL), status (Aangekondigd|In behandeling|Afgerond), date (dag maand in Dutch), summary (2 sentences in Dutch), advisors (comma-separated bank names), rationale (1 sentence in Dutch).\nReturn 6-8 deals. ONLY the JSON array.',
-        messages: [{ role: 'user', content: 'Geef me de grootste M&A deals van de afgelopen 7 dagen. Zoek dit op en return alleen een JSON array.' }]
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: USER_MESSAGE }]
       })
     });
 
@@ -618,10 +669,7 @@ async function fetchDeals() {
       showKeyForm('API-sleutel ongeldig of verlopen. Probeer opnieuw.');
       return;
     }
-
-    if (!resp.ok) {
-      throw new Error('HTTP ' + resp.status);
-    }
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
 
     const data = await resp.json();
     let text = '';
@@ -629,24 +677,54 @@ async function fetchDeals() {
       if (block.type === 'text') text += block.text;
     }
 
-    text = text.trim();
-    const start = text.indexOf('[');
-    const end = text.lastIndexOf(']');
-    if (start === -1 || end === -1) throw new Error('No JSON array');
-    const parsed = JSON.parse(text.slice(start, end + 1));
-
+    const parsed = parseDealsFromText(text);
     allDeals = parsed;
     buildFilters(allDeals);
     updateStats(allDeals);
     renderDeals(allDeals);
 
   } catch (err) {
-    list.innerHTML =
-      '<div class="error-state">' +
-        '<div class="error-title">Kon deals niet laden</div>' +
-        '<div class="error-sub">Controleer je internetverbinding en probeer het opnieuw.</div>' +
-        '<button class="btn-retry" onclick="fetchDeals()">Opnieuw proberen</button>' +
-      '</div>';
+    showErrorState(list);
+  }
+}
+
+async function fetchViaGemini() {
+  const apiKey = localStorage.getItem(GEMINI_KEY_STORAGE);
+  const list = document.getElementById('deals-list');
+  showLoadingState('Gemini AI');
+
+  try {
+    const resp = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + apiKey,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+          contents: [{ role: 'user', parts: [{ text: USER_MESSAGE }] }],
+          tools: [{ google_search: {} }]
+        })
+      }
+    );
+
+    if (resp.status === 400 || resp.status === 403) {
+      localStorage.removeItem(GEMINI_KEY_STORAGE);
+      showKeyForm('Gemini API-sleutel ongeldig of verlopen. Probeer opnieuw.');
+      return;
+    }
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
+    const data = await resp.json();
+    const text = (data.candidates?.[0]?.content?.parts?.[0]?.text) || '';
+
+    const parsed = parseDealsFromText(text);
+    allDeals = parsed;
+    buildFilters(allDeals);
+    updateStats(allDeals);
+    renderDeals(allDeals);
+
+  } catch (err) {
+    showErrorState(list);
   }
 }
 
